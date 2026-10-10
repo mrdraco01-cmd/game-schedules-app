@@ -371,7 +371,8 @@ function renderResults() {
   const all = leagueTeamsCache[currentLeague];
   if (!res || !all) return;
   const q = document.getElementById("teamSearch").value.trim().toLowerCase();
-  const matches = all.filter((t) => !q || t.name.toLowerCase().includes(q) || t.full.toLowerCase().includes(q));
+  const matches = all.filter((t) => !q || t.name.toLowerCase().includes(q) || t.full.toLowerCase().includes(q)
+    || (t.abbr || "").toLowerCase() === q);
   const shown = matches.slice(0, 60);
   res.innerHTML = shown.map((t) => {
     const mine = isMine(currentLeague, t.id);
