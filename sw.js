@@ -1,6 +1,6 @@
 // Game Schedule service worker — keeps the app shell available offline.
 // Bump VERSION whenever you upload a new index.html so phones pick it up.
-const VERSION = "v4";
+const VERSION = "v5";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
