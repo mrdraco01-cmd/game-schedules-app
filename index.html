@@ -224,7 +224,13 @@ const DEFAULT_TEAMS = [
   { league: "mls",  id: 4771,   name: "Real Salt Lake",     logo: logoUrl("soccer/500/4771") },
   { league: "nba",  id: 26,     name: "Utah Jazz",          logo: logoUrl("nba/500/utah") },
 ];
-let myTeams = store.get("myTeams", null) || DEFAULT_TEAMS;
+// New installs start with no teams. A phone that already used the app
+// (before team lists were saved) keeps the original six.
+let myTeams = store.get("myTeams", null);
+if (!myTeams) {
+  myTeams = store.get("lastData", null) ? DEFAULT_TEAMS : [];
+  store.set("myTeams", myTeams);
+}
 const saveTeams = () => store.set("myTeams", myTeams);
 const scheduleUrl = () => API + "?" + myTeams.map((t) => "t=" + encodeURIComponent(`${t.league}~${t.id}~${t.name}`)).join("&");
 
@@ -304,7 +310,9 @@ function setUpdated(text) { updatedEl.textContent = text; }
 
 async function load() {
   if (!myTeams.length) {
-    list.innerHTML = `<div class="msg">No teams yet.<br><br><button class="bigadd" onclick="openSheet()">+ Add a team</button></div>`;
+    list.innerHTML = `<div class="msg"><b style="color:var(--text);font-size:18px">Welcome!</b><br><br>
+      Add the teams you follow to see when they play, how to watch, and scores — hidden until you tap.<br><br>
+      <button class="bigadd" onclick="openSheet(true)">+ Add your teams</button></div>`;
     setUpdated("");
     return;
   }
@@ -366,7 +374,9 @@ const sheetTitle = document.getElementById("sheetTitle");
 const sheetBack = document.getElementById("sheetBack");
 let leagues = null;          // [{key, name}]
 const leagueTeamsCache = {}; // league -> [{id, name, full, logo}]
-let currentLeague = store.get("lastLeague", "cfb");
+let currentLeague = "all";
+const searchCache = {};      // query -> results from /search
+let searchTimer = null;
 let teamsChanged = false;
 
 const leagueName = (key) => (leagues || []).find((l) => l.key === key)?.name || key.toUpperCase();
@@ -382,9 +392,10 @@ async function getLeagues() {
   return leagues;
 }
 
-function openSheet() {
+function openSheet(goToAdd) {
   teamsChanged = false;
   sheet.classList.add("open");
+  if (goToAdd === true) { showAddTeam(); return; }
   showMyTeams();
   getLeagues().then(() => { if (sheetTitle.textContent === "My Teams") showMyTeams(); }).catch(() => {});
 }
@@ -412,19 +423,25 @@ async function showAddTeam() {
   sheetBack.hidden = false;
   sheetBody.innerHTML = `<div class="skeleton" style="height:40px"></div><div class="skeleton"></div>`;
   try { await getLeagues(); } catch { sheetBody.innerHTML = `<div class="msg">Couldn't load leagues. Check your connection.</div>`; return; }
+  currentLeague = "all";
+  const chips = [{ key: "all", name: "🔍 Search all" }, ...leagues];
   sheetBody.innerHTML = `
-    <div class="leagues">${leagues.map((l) => `<button class="lchip ${l.key === currentLeague ? "on" : ""}" data-league="${l.key}">${esc(l.name)}</button>`).join("")}</div>
-    <input id="teamSearch" class="search" type="search" placeholder="Search teams…" autocomplete="off">
+    <div class="leagues">${chips.map((l) => `<button class="lchip ${l.key === currentLeague ? "on" : ""}" data-league="${l.key}">${esc(l.name)}</button>`).join("")}</div>
+    <input id="teamSearch" class="search" type="search" placeholder="Search any team, school or city…" autocomplete="off">
     <div id="results"></div>`;
-  sheetBody.querySelector(".lchip.on")?.scrollIntoView({ inline: "center", block: "nearest" });
-  document.getElementById("teamSearch").addEventListener("input", renderResults);
-  loadLeague(currentLeague);
+  const input = document.getElementById("teamSearch");
+  input.addEventListener("input", renderResults);
+  loadLeague("all");
+  input.focus();
 }
 
 async function loadLeague(key) {
-  currentLeague = key; store.set("lastLeague", key);
+  currentLeague = key;
   sheetBody.querySelectorAll(".lchip").forEach((c) => c.classList.toggle("on", c.dataset.league === key));
+  const input = document.getElementById("teamSearch");
+  if (input) input.placeholder = key === "all" ? "Search any team, school or city…" : `Search ${leagueName(key)}…`;
   const res = document.getElementById("results");
+  if (key === "all") { renderResults(); return; }
   if (!leagueTeamsCache[key]) {
     res.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div>`;
     try {
@@ -435,7 +452,44 @@ async function loadLeague(key) {
   if (currentLeague === key) renderResults();
 }
 
+const teamRow = (t, league, sub) => {
+  const mine = isMine(league, t.id);
+  return `<div class="trow">
+    ${logoBox(t)}
+    <div class="tname"><b>${esc(t.name)}</b><small>${esc(sub)}</small></div>
+    <button class="add ${mine ? "added" : ""}" data-add="${esc(league)}~${t.id}" ${mine ? "disabled" : ""}>${mine ? "Added ✓" : "Add"}</button>
+  </div>`;
+};
+
+function renderSearchAll() {
+  const res = document.getElementById("results");
+  const q = document.getElementById("teamSearch").value.trim();
+  clearTimeout(searchTimer);
+  if (q.length < 2) {
+    res.innerHTML = `<p class="hint">Type a team, school or city — for example <b>BYU</b>, <b>Jazz</b>, <b>Utah Valley</b> or <b>United States</b>. Add a sport to narrow it down, like <b>BYU soccer</b>.</p>`;
+    return;
+  }
+  const key = q.toLowerCase();
+  const show = (data) => {
+    if (document.getElementById("teamSearch")?.value.trim().toLowerCase() !== key || currentLeague !== "all") return;
+    const rows = data.results || [];
+    res.innerHTML = rows.map((t) => teamRow(t, t.league, t.leagueName)).join("")
+      + (data.total > rows.length ? `<p class="hint">Showing ${rows.length} of ${data.total} — add more words to narrow it down.</p>` : "")
+      + (!rows.length ? `<div class="msg">No teams match "${esc(q)}".</div>` : "");
+  };
+  if (searchCache[key]) { show(searchCache[key]); return; }
+  res.innerHTML = `<div class="skeleton" style="height:60px"></div><div class="skeleton" style="height:60px"></div>`;
+  searchTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(API + "search?q=" + encodeURIComponent(q));
+      searchCache[key] = await r.json();
+      show(searchCache[key]);
+    } catch { res.innerHTML = `<div class="msg">Couldn't search right now. Check your connection.</div>`; }
+  }, 300);
+}
+
 function renderResults() {
+  if (currentLeague === "all") return renderSearchAll();
   const res = document.getElementById("results");
   const all = leagueTeamsCache[currentLeague];
   if (!res || !all) return;
@@ -443,14 +497,7 @@ function renderResults() {
   const matches = all.filter((t) => !q || t.name.toLowerCase().includes(q) || t.full.toLowerCase().includes(q)
     || (t.abbr || "").toLowerCase() === q);
   const shown = matches.slice(0, 60);
-  res.innerHTML = shown.map((t) => {
-    const mine = isMine(currentLeague, t.id);
-    return `<div class="trow">
-      ${logoBox(t)}
-      <div class="tname"><b>${esc(t.name)}</b><small>${esc(t.full)}</small></div>
-      <button class="add ${mine ? "added" : ""}" data-add="${t.id}" ${mine ? "disabled" : ""}>${mine ? "Added ✓" : "Add"}</button>
-    </div>`;
-  }).join("") + (matches.length > shown.length ? `<p class="hint">Showing ${shown.length} of ${matches.length} — type to narrow it down.</p>` : "")
+  res.innerHTML = shown.map((t) => teamRow(t, currentLeague, t.full)).join("") + (matches.length > shown.length ? `<p class="hint">Showing ${shown.length} of ${matches.length} — type to narrow it down.</p>` : "")
     + (!matches.length ? `<div class="msg">No teams match "${esc(q)}".</div>` : "");
 }
 
@@ -464,9 +511,13 @@ sheet.addEventListener("click", (e) => {
   if (lc) { loadLeague(lc.dataset.league); return; }
   const add = e.target.closest("[data-add]");
   if (add) {
-    const t = leagueTeamsCache[currentLeague].find((x) => String(x.id) === add.dataset.add);
-    if (t && !isMine(currentLeague, t.id)) {
-      myTeams.push({ league: currentLeague, id: t.id, name: t.name, logo: t.logo });
+    const [league, id] = add.dataset.add.split("~");
+    const pool = currentLeague === "all"
+      ? Object.values(searchCache).flatMap((d) => d.results || []).filter((x) => x.league === league)
+      : leagueTeamsCache[league] || [];
+    const t = pool.find((x) => String(x.id) === id);
+    if (t && !isMine(league, t.id)) {
+      myTeams.push({ league, id: t.id, name: t.name, logo: t.logo });
       saveTeams(); teamsChanged = true;
       add.textContent = "Added ✓"; add.classList.add("added"); add.disabled = true;
     }
