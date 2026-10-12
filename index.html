@@ -124,6 +124,43 @@
   .search:focus { border-color: var(--accent); }
   .hint { color: var(--muted); font-size: 13px; margin: 2px 4px 12px; }
 
+  /* ---- Team schedule screen ---- */
+  .tlink { cursor: pointer; }
+  .tlink:active { opacity: .7; }
+  .team.tlink::after { content: " ›"; color: var(--muted); font-weight: 400; }
+  .thead { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; }
+  .thead .logo { width: 56px; height: 56px; grid-row: auto; }
+  .thead .logo img { width: 46px; height: 46px; }
+  .thead h3 { margin: 0; font-size: 19px; }
+  .thead small { color: var(--muted); font-size: 13px; display: block; margin-top: 3px; }
+  .rec { border: 1px dashed #4a5263; background: none; color: var(--muted); font: inherit; font-size: 12px;
+    padding: 3px 8px; border-radius: 8px; margin-top: 6px; cursor: pointer; }
+  .rec.shown { border-style: solid; color: var(--text); }
+  .tools { display: flex; gap: 8px; margin: 0 4px 10px; }
+  .tools .hbtn { height: 34px; font-size: 13px; }
+  .tools .hbtn.on { background: var(--accent); color: #fff; }
+  .srow { display: grid; grid-template-columns: 50px 1fr auto; gap: 10px; align-items: center;
+    background: var(--card); border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid transparent; }
+  .srow.in { border-color: rgba(255,77,79,.5); }
+  .srow.next { border-color: rgba(90,169,255,.5); }
+  .srow.post { opacity: .92; }
+  .sdate { text-align: center; line-height: 1.15; }
+  .sdate b { display: block; font-size: 15px; }
+  .sdate span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .sopp { min-width: 0; }
+  .sopp .o { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 15px; }
+  .sopp .o img { width: 22px; height: 22px; object-fit: contain; flex: none; }
+  .sopp .o span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sopp small { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .sright { text-align: right; font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .sright small { display: block; color: var(--muted); font-weight: 500; font-size: 11px; margin-top: 2px; }
+  .sright .reveal, .sright .score { margin: 0; }
+  .sright .score { font-size: 16px; }
+  .sright .badge { display: inline-block; margin-bottom: 4px; }
+  .tagchip { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: #c8b6ff;
+    background: rgba(160,130,255,.14); padding: 2px 6px; border-radius: 6px; margin-left: 6px; vertical-align: 1px; }
+  .sec { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 16px 4px 8px; }
+
   .skeleton { height: 96px; border-radius: 16px; margin-bottom: 10px;
     background: linear-gradient(90deg, var(--card) 0%, var(--card-2) 50%, var(--card) 100%);
     background-size: 200% 100%; animation: shimmer 1.2s infinite; }
@@ -150,10 +187,21 @@
   <div id="sheetBody" class="sheet-body"></div>
 </section>
 
+<!-- One team's full schedule -->
+<section id="teamSheet" class="sheet" aria-modal="true" role="dialog">
+  <div class="sheet-head">
+    <button id="teamBack" class="back">‹ Back</button>
+    <h2>Schedule</h2>
+    <button id="teamRefresh" class="hbtn" aria-label="Refresh">↻</button>
+  </div>
+  <div id="teamBody" class="sheet-body"></div>
+</section>
+
 <script>
 // ===== Settings =====
 const API = "https://game-schedule.mrdraco01.workers.dev/";
 const REFRESH_MINUTES = 5;
+const LIVE_REFRESH_SECONDS = 60;
 // =====================
 
 const list = document.getElementById("list");
@@ -235,10 +283,11 @@ function render(data, stale) {
       status = `<div class="status">${badge}${right}</div>`;
     }
 
+    const ti = myTeams.findIndex((t) => t.name === g.team);
     html += `
       <article class="game ${esc(g.state)}">
-        <div class="logo">${logo}</div>
-        <div class="team">${esc(g.team)}</div>
+        <div class="logo ${ti >= 0 ? "tlink" : ""}" ${ti >= 0 ? `data-team="${ti}"` : ""}>${logo}</div>
+        <div class="team ${ti >= 0 ? "tlink" : ""}" ${ti >= 0 ? `data-team="${ti}"` : ""}>${esc(g.team)}</div>
         <div class="time">${esc(timeLabel(g, d))}<small>${esc(g.homeAway)}</small></div>
         <div class="matchup">${g.matchup?.startsWith("@") ? "@" : "vs"} ${oppLogo}<span>${esc(g.opponent)}</span></div>
         <div class="meta">
@@ -265,22 +314,42 @@ async function load() {
     if (!r.ok) throw new Error(r.status);
     const data = await r.json();
     store.set("lastData", data);
-    // forget revealed scores for games no longer listed
-    const keys = new Set(data.games.map(gameKey));
-    revealed = new Set([...revealed].filter((k) => keys.has(k)));
-    store.set("revealed", [...revealed]);
+    pruneRevealed();
     render(data, false);
-    setUpdated("Updated " + new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
+    setUpdated((data.live ? "Live · updated " : "Updated ") + new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
+    isLive = !!data.live;
   } catch (e) {
     const cached = store.get("lastData", null);
     if (cached) { render(cached, true); setUpdated("Offline"); }
     else { list.innerHTML = `<div class="msg">Couldn't load the schedule. Check your connection and tap ↻.</div>`; setUpdated("Error"); }
   } finally {
     refreshBtn.classList.remove("spin");
+    scheduleNext();
   }
 }
 
+// Forget revealed scores for games more than 60 days old
+function pruneRevealed() {
+  const cutoff = Date.now() - 60 * 864e5;
+  revealed = new Set([...revealed].filter((k) => new Date(k.split("|").pop()).getTime() > cutoff));
+  store.set("revealed", [...revealed]);
+}
+
+// Refresh every minute while a game is live, otherwise every 5 minutes
+let isLive = false, nextTimer = null;
+function scheduleNext() {
+  clearTimeout(nextTimer);
+  const live = isLive || (teamSheet.classList.contains("open") && teamData?.live);
+  nextTimer = setTimeout(() => {
+    if (document.hidden) return scheduleNext();
+    load();
+    if (teamSheet.classList.contains("open")) loadTeam(false);
+  }, (live ? LIVE_REFRESH_SECONDS : REFRESH_MINUTES * 60) * 1000);
+}
+
 list.addEventListener("click", (e) => {
+  const tm = e.target.closest("[data-team]");
+  if (tm) { openTeam(myTeams[Number(tm.dataset.team)]); return; }
   const btn = e.target.closest("[data-key]");
   if (!btn) return;
   const k = btn.dataset.key;
@@ -332,7 +401,7 @@ function showMyTeams() {
     ${myTeams.map((t, i) => `
       <div class="trow">
         ${logoBox(t)}
-        <div class="tname"><b>${esc(t.name)}</b><small>${esc(leagueName(t.league))}</small></div>
+        <div class="tname tlink" data-open="${i}"><b>${esc(t.name)}</b><small>${esc(leagueName(t.league))} · tap for schedule</small></div>
         <button class="rm" data-remove="${i}">Remove</button>
       </div>`).join("")}
     <button class="bigadd" id="addTeamBtn">+ Add team</button>`;
@@ -388,6 +457,8 @@ function renderResults() {
 sheet.addEventListener("click", (e) => {
   const rm = e.target.closest("[data-remove]");
   if (rm) { myTeams.splice(Number(rm.dataset.remove), 1); saveTeams(); teamsChanged = true; showMyTeams(); return; }
+  const op = e.target.closest("[data-open]");
+  if (op) { openTeam(myTeams[Number(op.dataset.open)]); return; }
   if (e.target.closest("#addTeamBtn")) { showAddTeam(); return; }
   const lc = e.target.closest("[data-league]");
   if (lc) { loadLeague(lc.dataset.league); return; }
@@ -405,8 +476,120 @@ sheetBack.addEventListener("click", showMyTeams);
 document.getElementById("sheetDone").addEventListener("click", closeSheet);
 document.getElementById("teamsBtn").addEventListener("click", openSheet);
 window.openSheet = openSheet;
-document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
-setInterval(() => { if (!document.hidden) load(); }, REFRESH_MINUTES * 60e3);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  load();
+  if (teamSheet.classList.contains("open")) loadTeam(false);
+});
+
+// ===== One team's full schedule =====
+const teamSheet = document.getElementById("teamSheet");
+const teamBody = document.getElementById("teamBody");
+let currentTeam = null, teamData = null, teamShowAll = false, teamShowRecord = false;
+
+function openTeam(t) {
+  if (!t) return;
+  currentTeam = t; teamData = null; teamShowAll = false; teamShowRecord = false;
+  teamSheet.classList.add("open");
+  teamBody.innerHTML = `${teamHeader()}<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>`;
+  loadTeam(true);
+}
+function closeTeam() { teamSheet.classList.remove("open"); currentTeam = null; scheduleNext(); }
+
+async function loadTeam(scrollToNext) {
+  const t = currentTeam;
+  if (!t) return;
+  try {
+    const r = await fetch(API + "team?t=" + encodeURIComponent(`${t.league}~${t.id}~${t.name}`), { cache: "no-store" });
+    const data = await r.json();
+    if (!r.ok || data.error) throw new Error(data.error || r.status);
+    if (currentTeam !== t) return;
+    teamData = data;
+    store.set("team:" + t.league + ":" + t.id, data);
+    renderTeam(scrollToNext);
+  } catch {
+    if (currentTeam !== t) return;
+    const cached = store.get("team:" + t.league + ":" + t.id, null);
+    if (cached) { teamData = cached; renderTeam(scrollToNext, true); }
+    else teamBody.innerHTML = `${teamHeader()}<div class="msg">Couldn't load this schedule. Check your connection and tap ↻.</div>`;
+  }
+  scheduleNext();
+}
+
+function teamHeader() {
+  const t = currentTeam, info = teamData?.team || {};
+  const sub = [info.leagueName].filter(Boolean).join(" · ");
+  let rec = "";
+  if (info.record || info.standing) {
+    const text = [info.record, info.standing].filter(Boolean).join(" · ");
+    rec = teamShowRecord
+      ? `<button class="rec shown" data-rec>${esc(text)}</button>`
+      : `<button class="rec" data-rec>Record hidden · tap to show</button>`;
+  }
+  return `<div class="thead">${logoBox({ name: t.name, logo: info.logo || t.logo })}
+    <div><h3>${esc(t.name)}</h3><small>${esc(sub)}</small>${rec}</div></div>`;
+}
+
+function renderTeam(scrollToNext, stale) {
+  const games = teamData?.games || [];
+  const now = Date.now();
+  const nextIdx = games.findIndex((g) => g.state !== "post");
+  let html = teamHeader();
+  html += stale ? `<div class="banner" style="margin:0 4px 10px">Offline — showing the last saved schedule.</div>` : "";
+  html += `<div class="tools">
+    <button class="hbtn ${teamShowAll ? "on" : ""}" data-showall>${teamShowAll ? "Hide all scores" : "Show all scores"}</button>
+    <button class="hbtn" data-jump>Jump to next game</button></div>`;
+  if (!games.length) html += `<div class="msg">No games found for this season yet.</div>`;
+  let lastSec = "";
+  games.forEach((g, i) => {
+    const sec = g.state === "post" ? "Results" : g.state === "in" ? "Live now" : "Upcoming";
+    if (sec !== lastSec) { html += `<div class="sec">${sec}</div>`; lastSec = sec; }
+    const d = new Date(g.iso);
+    const key = gameKey(g);
+    const show = teamShowAll || revealed.has(key);
+    const opp = g.oppLogo ? `<img src="${esc(g.oppLogo)}" alt="" loading="lazy" onerror="this.remove()">` : "";
+    let right;
+    if (g.state === "pre") {
+      right = `${esc(timeLabel(g, d))}<small>${esc(g.watch)}</small>`;
+    } else {
+      const badge = g.state === "in" ? `<span class="badge live">${esc((g.status || "LIVE").replace(/^LIVE · /, "LIVE "))}</span><br>` : "";
+      const sc = !g.score ? `<small>${esc(g.status || "Final")}</small>`
+        : show ? `<button class="score" data-key="${esc(key)}">${esc(g.score)}${g.result ? `<span class="r ${esc(g.result)}">${esc(g.result)}</span>` : ""}</button>${g.state === "post" ? `<small>${esc(g.status || "Final")}</small>` : ""}`
+        : `<button class="reveal" data-key="${esc(key)}">${g.state === "in" ? "Tap for score" : "Show score"}</button>`;
+      right = badge + sc;
+    }
+    html += `<div class="srow ${esc(g.state)} ${i === nextIdx && g.state === "pre" ? "next" : ""}" ${i === nextIdx ? 'id="nextGame"' : ""}>
+      <div class="sdate"><span>${d.toLocaleDateString("en-US", { weekday: "short" })}</span><b>${d.getMonth() + 1}/${d.getDate()}</b></div>
+      <div class="sopp"><div class="o">${g.matchup?.startsWith("@") ? "@" : "vs"} ${opp}<span>${esc(g.opponent)}</span></div>
+        <small>${esc(g.homeAway)}${g.tag ? `<span class="tagchip">${esc(g.tag)}</span>` : ""}</small></div>
+      <div class="sright">${right}</div>
+    </div>`;
+  });
+  const y = teamBody.scrollTop;
+  teamBody.innerHTML = html;
+  if (scrollToNext) jumpToNext(); else teamBody.scrollTop = y;
+}
+
+function jumpToNext() {
+  const el = document.getElementById("nextGame");
+  if (el) teamBody.scrollTop = Math.max(0, el.offsetTop - teamBody.offsetTop - 120);
+}
+
+teamBody.addEventListener("click", (e) => {
+  if (e.target.closest("[data-rec]")) { teamShowRecord = !teamShowRecord; renderTeam(false); return; }
+  if (e.target.closest("[data-showall]")) { teamShowAll = !teamShowAll; renderTeam(false); return; }
+  if (e.target.closest("[data-jump]")) { jumpToNext(); return; }
+  const btn = e.target.closest("[data-key]");
+  if (!btn) return;
+  const k = btn.dataset.key;
+  if (teamShowAll) return;
+  revealed.has(k) ? revealed.delete(k) : revealed.add(k);
+  store.set("revealed", [...revealed]);
+  renderTeam(false);
+  render(store.get("lastData", { games: [] }), false);
+});
+document.getElementById("teamBack").addEventListener("click", closeTeam);
+document.getElementById("teamRefresh").addEventListener("click", () => loadTeam(false));
 
 // Show saved schedule instantly, then refresh
 const saved = store.get("lastData", null);
