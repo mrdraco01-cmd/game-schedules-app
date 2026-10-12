@@ -161,6 +161,24 @@
     background: rgba(160,130,255,.14); padding: 2px 6px; border-radius: 6px; margin-left: 6px; vertical-align: 1px; }
   .sec { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 16px 4px 8px; }
 
+  /* ---- Watch / Highlights buttons ---- */
+  .acts { grid-column: 1 / 4; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .act { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; font-size: 13px; font-weight: 600;
+    padding: 7px 12px; border-radius: 10px; background: rgba(90,169,255,.14); color: var(--accent); }
+  .act.hl { background: rgba(255,77,79,.14); color: #ff7b7d; }
+  .sacts { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .sacts .act { font-size: 12px; padding: 5px 10px; }
+  .hlset { display: block; background: none; border: 0; padding: 0; margin-top: 4px; color: var(--accent);
+    font: inherit; font-size: 12px; cursor: pointer; text-align: left; }
+  .hledit { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .hledit input { flex: 1 1 140px; min-width: 0; font: inherit; font-size: 15px; padding: 8px 10px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .hledit button { border: 0; border-radius: 10px; padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    background: var(--card-2); color: var(--text); }
+  .hledit button.save { background: var(--accent); color: #fff; }
+  .trow.editing { flex-wrap: wrap; }
+  .trow.editing .hledit { flex-basis: 100%; }
+
   .skeleton { height: 96px; border-radius: 16px; margin-bottom: 10px;
     background: linear-gradient(90deg, var(--card) 0%, var(--card-2) 50%, var(--card) 100%);
     background-size: 200% 100%; animation: shimmer 1.2s infinite; }
@@ -253,6 +271,27 @@ function timeLabel(g, d) {
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+// ===== Watch & highlights links =====
+const LEAGUE_HL = { nfl: "@NFL", nba: "@NBA", wnba: "@WNBA", nhl: "@NHL", mlb: "@MLB", mls: "@MLS", nwsl: "@NWSLsoccer", epl: "@NBCSports" };
+const teamFor = (g) => myTeams.find((t) => t.name === g.team);
+function highlightsUrl(g) {
+  if (!g.hl) return "";
+  const own = teamFor(g)?.hl;                       // undefined = league default, "" = plain YouTube search
+  const channel = own === undefined ? g.hl.channel : own;
+  return channel
+    ? `https://www.youtube.com/${channel}/search?query=${encodeURIComponent(g.hl.query)}`
+    : `https://www.youtube.com/results?search_query=${encodeURIComponent(g.hl.search)}`;
+}
+const linkBtn = (url, text, cls = "") =>
+  `<a class="act ${cls}" href="${esc(url)}" target="_blank" rel="noopener">${text}</a>`;
+function actionButtons(g) {
+  if (g.state === "post") {
+    const u = highlightsUrl(g);
+    return u ? linkBtn(u, "▶ Highlights", "hl") : "";
+  }
+  return (g.watchLinks || []).map((l) => linkBtn(l.url, `📺 Watch · ${esc(l.label)}`)).join("");
+}
+
 function render(data, stale) {
   const games = (data && data.games) || [];
   if (!games.length) {
@@ -301,6 +340,7 @@ function render(data, stale) {
           <span class="chip ${ha}">${esc(g.homeAway)}</span>
         </div>
         ${status}
+        ${(() => { const a = actionButtons(g); return a ? `<div class="acts">${a}</div>` : ""; })()}
       </article>`;
   }
   list.innerHTML = html;
@@ -404,16 +444,40 @@ function closeSheet() {
   if (teamsChanged) { store.set("lastData", null); list.innerHTML = `<div class="skeleton"></div><div class="skeleton"></div>`; load(); }
 }
 
+let editingHl = -1;
+function hlLabel(t) {
+  if (t.hl === undefined) return LEAGUE_HL[t.league] || ([660, 2765].includes(Number(t.id)) && t.league.startsWith("intl") ? "@ussoccer" : "YouTube search");
+  return t.hl || "YouTube search";
+}
+// Accept "@handle", "handle" or a full youtube.com/@handle link
+function cleanHandle(v) {
+  const m = String(v || "").trim().match(/@[\w.\-]+/);
+  if (m) return m[0];
+  const plain = String(v || "").trim().replace(/^https?:\/\/\S*youtube\.com\//i, "").replace(/\/.*$/, "");
+  return /^[\w.\-]{3,}$/.test(plain) ? "@" + plain : "";
+}
+function setHl(i, value) {
+  if (value === undefined) delete myTeams[i].hl; else myTeams[i].hl = value;
+  saveTeams(); editingHl = -1; showMyTeams();
+  render(store.get("lastData", { games: [] }), false);
+}
+
 function showMyTeams() {
   sheetTitle.textContent = "My Teams";
   sheetBack.hidden = true;
   sheetBody.innerHTML = `
     <p class="hint">${myTeams.length} team${myTeams.length === 1 ? "" : "s"} · saved on this phone</p>
     ${myTeams.map((t, i) => `
-      <div class="trow">
+      <div class="trow ${editingHl === i ? "editing" : ""}">
         ${logoBox(t)}
-        <div class="tname tlink" data-open="${i}"><b>${esc(t.name)}</b><small>${esc(leagueName(t.league))} · tap for schedule</small></div>
+        <div class="tname"><div class="tlink" data-open="${i}"><b>${esc(t.name)}</b><small>${esc(leagueName(t.league))} · tap for schedule</small></div>
+          <button class="hlset" data-hl="${i}">▶ Highlights: ${esc(hlLabel(t))} ✎</button></div>
         <button class="rm" data-remove="${i}">Remove</button>
+        ${editingHl === i ? `<div class="hledit">
+          <input id="hlInput" placeholder="@channel (e.g. @BYUCougars)" value="${esc(t.hl || "")}" autocomplete="off" autocapitalize="off">
+          <button class="save" data-hlsave="${i}">Save</button>
+          <button data-hlsearch="${i}">YouTube search</button>
+          <button data-hldefault="${i}">Default</button></div>` : ""}
       </div>`).join("")}
     <button class="bigadd" id="addTeamBtn">+ Add team</button>`;
 }
@@ -503,7 +567,19 @@ function renderResults() {
 
 sheet.addEventListener("click", (e) => {
   const rm = e.target.closest("[data-remove]");
-  if (rm) { myTeams.splice(Number(rm.dataset.remove), 1); saveTeams(); teamsChanged = true; showMyTeams(); return; }
+  if (rm) { myTeams.splice(Number(rm.dataset.remove), 1); saveTeams(); teamsChanged = true; editingHl = -1; showMyTeams(); return; }
+  const hb = e.target.closest("[data-hl]");
+  if (hb) { const i = Number(hb.dataset.hl); editingHl = editingHl === i ? -1 : i; showMyTeams(); document.getElementById("hlInput")?.focus(); return; }
+  const hs = e.target.closest("[data-hlsave]");
+  if (hs) {
+    const v = cleanHandle(document.getElementById("hlInput").value);
+    setHl(Number(hs.dataset.hlsave), v || undefined);
+    return;
+  }
+  const hq = e.target.closest("[data-hlsearch]");
+  if (hq) { setHl(Number(hq.dataset.hlsearch), ""); return; }
+  const hd = e.target.closest("[data-hldefault]");
+  if (hd) { setHl(Number(hd.dataset.hldefault), undefined); return; }
   const op = e.target.closest("[data-open]");
   if (op) { openTeam(myTeams[Number(op.dataset.open)]); return; }
   if (e.target.closest("#addTeamBtn")) { showAddTeam(); return; }
@@ -522,6 +598,9 @@ sheet.addEventListener("click", (e) => {
       add.textContent = "Added ✓"; add.classList.add("added"); add.disabled = true;
     }
   }
+});
+sheet.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "hlInput") document.querySelector("[data-hlsave]")?.click();
 });
 sheetBack.addEventListener("click", showMyTeams);
 document.getElementById("sheetDone").addEventListener("click", closeSheet);
@@ -614,6 +693,7 @@ function renderTeam(scrollToNext, stale) {
       <div class="sopp"><div class="o">${g.matchup?.startsWith("@") ? "@" : "vs"} ${opp}<span>${esc(g.opponent)}</span></div>
         <small>${esc(g.homeAway)}${g.tag ? `<span class="tagchip">${esc(g.tag)}</span>` : ""}</small></div>
       <div class="sright">${right}</div>
+      ${(() => { const a = actionButtons(g); return a ? `<div class="sacts">${a}</div>` : ""; })()}
     </div>`;
   });
   const y = teamBody.scrollTop;
