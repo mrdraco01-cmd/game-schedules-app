@@ -282,14 +282,51 @@ function highlightsUrl(g) {
     ? `https://www.youtube.com/${channel}/search?query=${encodeURIComponent(g.hl.query)}`
     : `https://www.youtube.com/results?search_query=${encodeURIComponent(g.hl.search)}`;
 }
-const linkBtn = (url, text, cls = "") =>
-  `<a class="act ${cls}" href="${esc(url)}" target="_blank" rel="noopener">${text}</a>`;
+// ----- Open the streaming app installed on the phone -----
+// Android: an "intent" link launches the app (falls back to the website if it isn't installed).
+// iPhone/Mac: the normal https link, which iOS hands to the app when it's installed.
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const APPS = [
+  { test: /espn\.com/i,            pkg: "com.espn.score_center" },
+  { test: /disneyplus\.com/i,      pkg: "com.disney.disneyplus" },
+  { test: /tv\.apple\.com/i,       pkg: "com.apple.atve.androidtv.appletv" },
+  { test: /netflix\.com/i,         pkg: "com.netflix.mediaclient" },
+  { test: /primevideo\.com|amazon\.com\/gp\/video/i, pkg: "com.amazon.avod.thirdpartyclient" },
+  { test: /hbomax\.com/i,          pkg: "com.wbd.stream" },
+  { test: /paramountplus\.com/i,   pkg: "com.cbs.app" },
+  { test: /peacocktv\.com/i,       pkg: "com.peacocktv.peacockandroid" },
+  { test: /foxsports\.com/i,       pkg: "com.foxsports.android" },
+  { test: /youtube\.com/i,         pkg: "com.google.android.youtube" },
+];
+// Better app-friendly addresses for a few services
+const APP_URLS = { "https://www.hbomax.com/": "https://play.hbomax.com/",
+  "https://www.amazon.com/gp/video/storefront": "https://www.primevideo.com/" };
+let espnApp = store.get("espnApp", "espn"); // "espn" or "disney"
+
+function appHref(url) {
+  url = APP_URLS[url] || url;
+  const app = APPS.find((a) => a.test.test(url));
+  if (!IS_ANDROID || !app) return { href: url, newTab: true };
+  const u = new URL(url);
+  return { href: `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=${app.pkg};`
+    + `S.browser_fallback_url=${encodeURIComponent(url)};end`, newTab: false };
+}
+function watchTarget(l) {
+  const isEspn = /espn\.com/i.test(l.url);
+  if (isEspn && espnApp === "disney") return { label: `Disney+ (${l.label})`, url: "https://www.disneyplus.com/" };
+  return l;
+}
+
+const linkBtn = (url, text, cls = "") => {
+  const { href, newTab } = appHref(url);
+  return `<a class="act ${cls}" href="${esc(href)}" ${newTab ? 'target="_blank" rel="noopener"' : ""}>${text}</a>`;
+};
 function actionButtons(g) {
   if (g.state === "post") {
     const u = highlightsUrl(g);
     return u ? linkBtn(u, "▶ Highlights", "hl") : "";
   }
-  return (g.watchLinks || []).map((l) => linkBtn(l.url, `📺 Watch · ${esc(l.label)}`)).join("");
+  return (g.watchLinks || []).map(watchTarget).map((l) => linkBtn(l.url, `📺 Watch · ${esc(l.label)}`)).join("");
 }
 
 function render(data, stale) {
@@ -479,7 +516,15 @@ function showMyTeams() {
           <button data-hlsearch="${i}">YouTube search</button>
           <button data-hldefault="${i}">Default</button></div>` : ""}
       </div>`).join("")}
-    <button class="bigadd" id="addTeamBtn">+ Add team</button>`;
+    <button class="bigadd" id="addTeamBtn">+ Add team</button>
+    <div class="sec" style="margin-top:24px">Watch settings</div>
+    <div class="trow" style="flex-wrap:wrap">
+      <div class="tname"><b>ESPN, ESPN+ &amp; ABC games open in</b><small>Saved on this phone</small></div>
+      <div class="tools" style="margin:6px 0 0;flex-basis:100%">
+        <button class="hbtn ${espnApp === "espn" ? "on" : ""}" data-espnapp="espn">ESPN app</button>
+        <button class="hbtn ${espnApp === "disney" ? "on" : ""}" data-espnapp="disney">Disney+</button>
+      </div>
+    </div>`;
 }
 
 async function showAddTeam() {
@@ -568,6 +613,12 @@ function renderResults() {
 sheet.addEventListener("click", (e) => {
   const rm = e.target.closest("[data-remove]");
   if (rm) { myTeams.splice(Number(rm.dataset.remove), 1); saveTeams(); teamsChanged = true; editingHl = -1; showMyTeams(); return; }
+  const ea = e.target.closest("[data-espnapp]");
+  if (ea) {
+    espnApp = ea.dataset.espnapp; store.set("espnApp", espnApp); showMyTeams();
+    render(store.get("lastData", { games: [] }), false);
+    return;
+  }
   const hb = e.target.closest("[data-hl]");
   if (hb) { const i = Number(hb.dataset.hl); editingHl = editingHl === i ? -1 : i; showMyTeams(); document.getElementById("hlInput")?.focus(); return; }
   const hs = e.target.closest("[data-hlsave]");
