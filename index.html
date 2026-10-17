@@ -265,6 +265,15 @@ function dayLabel(d) {
   if (k(d) === k(yest)) return "Yesterday";
   return d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
 }
+// Date to show for a game. TBD games come from ESPN as midnight Eastern, which would
+// show as the evening before in Mountain time, so use their calendar date instead.
+function gameDate(g) {
+  if (g.time === "TBD") {
+    const day = g.dateOnly || new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(g.iso));
+    return new Date(`${day}T12:00:00`);
+  }
+  return new Date(g.iso);
+}
 function timeLabel(g, d) {
   if (g.time === "TBD") return "TBD";
   return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -337,7 +346,7 @@ function render(data, stale) {
   let html = stale ? `<div class="banner">Offline — showing the last schedule saved on this phone.</div>` : "";
   let lastDay = "";
   for (const g of games) {
-    const d = new Date(g.iso);
+    const d = gameDate(g);
     const day = dayLabel(d);
     if (day !== lastDay) {
       html += `<div class="day ${day === "Today" ? "today" : ""}">${esc(day)}</div>`;
@@ -758,7 +767,7 @@ function renderTeam(scrollToNext, stale) {
   games.forEach((g, i) => {
     const sec = g.state === "post" ? "Results" : g.state === "in" ? "Live now" : "Upcoming";
     if (sec !== lastSec) { html += `<div class="sec">${sec}</div>`; lastSec = sec; }
-    const d = new Date(g.iso);
+    const d = gameDate(g);
     const key = gameKey(g);
     const show = teamShowAll || revealed.has(key);
     const opp = g.oppLogo ? `<img src="${esc(g.oppLogo)}" alt="" loading="lazy" onerror="this.remove()">` : "";
